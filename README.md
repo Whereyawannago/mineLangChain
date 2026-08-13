@@ -16,14 +16,22 @@ LangChain 学习示例项目。基于 LangChain 1.x，使用 minimax 的 Anthrop
 
 ```
 mineLangChain/
-├── agent.py     # Agent 构造：LLM、工具、消息裁剪中间件、checkpointer / store
-├── main.py      # 入口：仅包含多轮对话循环
-├── .env         # API key 等本地配置（已加入 .gitignore）
+├── agent/                  ← Agent 包（构造 + 配置）
+│   ├── __init__.py         # 暴露 build_agent
+│   ├── builder.py          # 组装层：把 LLM + 上下文管理 + tools 合成 agent
+│   ├── llm.py              # ChatAnthropic 工厂（minimax 代理）
+│   └── context/            ← 上下文管理（按 LangChain 官方 3 类拆分）
+│       ├── __init__.py
+│       ├── short_term.py   # 短期记忆：checkpointer
+│       ├── long_term.py    # 长期记忆：Store + preference 工具
+│       └── trim.py         # 消息裁剪：@before_model 中间件
+├── main.py                 # 入口：仅包含多轮对话循环
+├── .env                    # API key 等本地配置（已加入 .gitignore）
 ├── pyproject.toml
 └── uv.lock
 ```
 
-`build_agent()` 在 `agent.py` 里定义，`main.py` 只 `from agent import build_agent` 然后跑循环。
+`main.py` 只 `from agent import build_agent`，agent 包的内部细节对入口透明。
 
 ## 快速开始
 
