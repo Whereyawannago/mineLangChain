@@ -1,8 +1,3 @@
-"""LLM 构造。
-
-集中处理：环境变量读取、Anthropic 兼容代理配置、缺失 key 报错。
-"""
-
 import os
 
 from langchain_anthropic import ChatAnthropic

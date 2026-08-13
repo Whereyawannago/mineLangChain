@@ -20,18 +20,45 @@ mineLangChain/
 │   ├── __init__.py         # 暴露 build_agent
 │   ├── builder.py          # 组装层：把 LLM + 上下文管理 + tools 合成 agent
 │   ├── llm.py              # ChatAnthropic 工厂（minimax 代理）
+│   ├── tools.py            # 演示型工具（如 slow_lookup，用于演示流式）
 │   └── context/            ← 上下文管理（按 LangChain 官方 3 类拆分）
 │       ├── __init__.py
 │       ├── short_term.py   # 短期记忆：checkpointer
 │       ├── long_term.py    # 长期记忆：Store + preference 工具
 │       └── trim.py         # 消息裁剪：@before_model 中间件
-├── main.py                 # 入口：仅包含多轮对话循环
+├── main.py                 # 入口：流式多轮对话（订阅三种 stream_mode）
 ├── .env                    # API key 等本地配置（已加入 .gitignore）
 ├── pyproject.toml
 └── uv.lock
 ```
 
 `main.py` 只 `from agent import build_agent`，agent 包的内部细节对入口透明。
+
+## 三种数据流（stream_mode）
+
+`main.py` 同时订阅三种 stream_mode：
+
+| 模式 | 触发 | 终端表现 |
+|---|---|---|
+| `messages` | LLM 逐 token 输出 | `<<< 你好！很高...` 打字机效果 |
+| `custom` | 工具内 `get_stream_writer()` 推送 | `⚙ [custom] {'event': 'progress', ...}` |
+| `updates` | 每个 graph 节点执行完（仅 `--debug` 开启时打印） | `↳ [model] AIMessage: 你好！...` |
+
+试试：
+
+```bash
+# 普通模式
+uv run python main.py
+
+# 调试模式（额外打印 updates）
+uv run python main.py --debug
+```
+
+进入对话后输入：
+
+- `你好` —— 看 token 流（messages）
+- `请用 slow_lookup 查一下北京` —— 看工具推送的进度（custom）
+- `--debug` 启动后任何输入 —— 看每步 state 增量（updates）
 
 ## 快速开始
 
