@@ -32,20 +32,27 @@ MAX_CONTEXT_TOKENS = 2000
 SUMMARY_KEEP_TOKENS = 400
 
 
-def make_summarization_middleware() -> SummarizationMiddleware:
+def make_summarization_middleware(
+    *,
+    trigger_tokens: int | None = None,
+    keep_tokens: int | None = None,
+    model=None,
+) -> SummarizationMiddleware:
     """构造一个内置 SummarizationMiddleware 实例。
 
     - model:         用于生成摘要的模型。这里复用主模型；
                      生产环境建议换成更便宜的模型（如 Haiku）。
-    - trigger:       当 token 数 >= MAX_CONTEXT_TOKENS 时触发摘要。
+    - trigger:       当 token 数 >= trigger_tokens 时触发摘要。
                      用绝对 tokens 而非 fraction，避免依赖模型 profile 数据
                      （minimax 代理上的 MiniMax-M3 没有标准 profile）。
-    - keep:          摘要后保留最近 SUMMARY_KEEP_TOKENS 个 token 的原始消息。
+    - keep:          摘要后保留最近 keep_tokens 个 token 的原始消息。
     - token_counter: 默认用 count_tokens_approximately（启发式估算），
                      不依赖具体模型的 count_tokens API。
+
+    三个参数都可选，便于演示 / 测试时动态调整阈值。
     """
     return SummarizationMiddleware(
-        model=build_llm(),
-        trigger=("tokens", MAX_CONTEXT_TOKENS),
-        keep=("tokens", SUMMARY_KEEP_TOKENS),
+        model=model or build_llm(),
+        trigger=("tokens", trigger_tokens if trigger_tokens is not None else MAX_CONTEXT_TOKENS),
+        keep=("tokens", keep_tokens if keep_tokens is not None else SUMMARY_KEEP_TOKENS),
     )

@@ -9,7 +9,7 @@ LangChain 学习示例项目。基于 LangChain 1.x，使用 minimax 的 Anthrop
 | 上下文类型 | 实现方式 |
 |---|---|
 | **短期记忆** | `InMemorySaver` checkpointer + `thread_id` 实现多轮对话 |
-| **消息裁剪** | `@before_model` 中间件 + `trim_messages` 按 token 阈值裁剪 |
+| **消息摘要** | `SummarizationMiddleware` 超 token 阈值时压缩老消息（默认 2000） |
 | **长期记忆** | `InMemoryStore` + `save_user_preference` / `get_user_preference` 工具 |
 
 ## 内置中间件
@@ -20,7 +20,7 @@ LangChain 学习示例项目。基于 LangChain 1.x，使用 minimax 的 Anthrop
 |---|---|---|
 | `ModelCallLimitMiddleware` | 防止 agent 死循环 | `thread_limit=15`, `run_limit=20`, `exit_behavior="end"` |
 | `HumanInTheLoopMiddleware` | 敏感工具调用前询问用户 | `slow_lookup` 需要 `approve` / `edit` / `reject` 决策 |
-| `make_trim_middleware()` | 消息长度超过阈值时裁剪 | 启发式 token 计数，阈值 2000 |
+| `make_summarization_middleware()` | token 超阈值时压缩老消息 | `trigger=("tokens", 2000)`, `keep=("tokens", 400)` |
 
 ## 项目结构
 
@@ -41,6 +41,8 @@ mineLangChain/
 │       ├── human_in_the_loop.py # 人在回路，slow_lookup 前暂停审批
 │       └── summarization.py     # 消息摘要，超 token 阈值时压缩老消息
 ├── main.py                      # 入口：流式多轮对话（订阅三种 stream_mode）
+├── demos/                       # 一键演示脚本
+│   └── long_conversation.py     # 假长对话，自动触发 SummarizationMiddleware
 ├── .env                         # API key 等本地配置（已加入 .gitignore）
 ├── pyproject.toml
 └── uv.lock
