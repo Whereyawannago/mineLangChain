@@ -1,9 +1,15 @@
 """agent 包 —— LangChain Agent 构造与配置。
 
-按官方文档（docs.langchain.com）实现三类上下文管理：
+按官方文档（docs.langchain.com）实现：
+
+上下文管理（非中间件）：
     1. 短期记忆  —— checkpointer + thread_id 多轮对话
     2. 长期记忆  —— Store + 偏好工具，跨会话持久化
-    3. 消息裁剪  —— @before_model 中间件按 token 阈值截断
+
+中间件（agent.middleware 子包）：
+    1. 模型调用上限  —— 防止 agent 死循环
+    2. 人在回路      —— 敏感工具调用前暂停审批
+    3. 消息摘要      —— token 超阈值时自动压缩老消息
 
 对外只需：
     from agent import build_agent
@@ -15,6 +21,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from .builder import build_agent
-from .context import MAX_CONTEXT_TOKENS
+from .middleware import MAX_CONTEXT_TOKENS
 
 __all__ = ["build_agent", "MAX_CONTEXT_TOKENS"]

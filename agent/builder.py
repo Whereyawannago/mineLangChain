@@ -1,6 +1,6 @@
 """Agent 组装层
 
-把 LLM、上下文管理（短期/长期/裁剪）以及 system prompt 组合成最终可调用的 agent。
+把 LLM、上下文管理（短期/长期）以及中间件（模型调用上限 / HITL / 摘要）组合成最终可调用的 agent。
 
 调用方式：
     agent = build_agent()
@@ -15,10 +15,14 @@ from langchain.agents import create_agent
 from .context import (
     create_checkpointer,
     create_store,
-    make_trim_middleware,
     preference_tools,
 )
 from .llm import build_llm
+from .middleware import (
+    make_human_in_the_loop_middleware,
+    make_model_call_limit_middleware,
+    make_summarization_middleware,
+)
 from .tools import demo_tools
 
 SYSTEM_PROMPT = (
@@ -32,12 +36,22 @@ SYSTEM_PROMPT = (
 
 
 def build_agent():
-    """组装并返回配置好的 LangChain agent。"""
+    """组装并返回配置好的 LangChain agent。
+
+    中间件按列表顺序串联执行：
+      1. ModelCallLimit —— 防止 agent 死循环
+      2. HumanInTheLoop —— slow_lookup 工具调用前暂停等人审批
+      3. Summarization  —— token 接近上限时自动摘要老消息
+    """
     return create_agent(
         model=build_llm(),
         system_prompt=SYSTEM_PROMPT,
         tools=preference_tools + demo_tools,
-        middleware=[make_trim_middleware()],
+        middleware=[
+            make_model_call_limit_middleware(),
+            make_human_in_the_loop_middleware(),
+            make_summarization_middleware(),
+        ],
         checkpointer=create_checkpointer(),
         store=create_store(),
     )
