@@ -23,7 +23,7 @@ trigger / keep 条件类型（ContextSize 或 TriggerClause）：
 
 from langchain.agents.middleware import SummarizationMiddleware
 
-from ..llm import build_llm
+from ..llm import build_llm, build_summary_llm
 
 # 超过这个 token 数就触发摘要
 MAX_CONTEXT_TOKENS = 2000
@@ -40,8 +40,10 @@ def make_summarization_middleware(
 ) -> SummarizationMiddleware:
     """构造一个内置 SummarizationMiddleware 实例。
 
-    - model:         用于生成摘要的模型。这里复用主模型；
-                     生产环境建议换成更便宜的模型（如 Haiku）。
+    - model:         用于生成摘要的模型。默认走 `build_summary_llm()`，
+                     默认是 Haiku 4.5——摘要任务对推理深度要求低，
+                     用便宜/快的模型能省一半成本。传 `None` 用默认；显式传模型可覆盖。
+                     传 `build_llm()` 可以强制用主模型（debug 用）。
     - trigger:       当 token 数 >= trigger_tokens 时触发摘要。
                      用绝对 tokens 而非 fraction，避免依赖模型 profile 数据
                      （minimax 代理上的 MiniMax-M3 没有标准 profile）。
@@ -52,7 +54,7 @@ def make_summarization_middleware(
     三个参数都可选，便于演示 / 测试时动态调整阈值。
     """
     return SummarizationMiddleware(
-        model=model or build_llm(),
+        model=model if model is not None else build_summary_llm(),
         trigger=("tokens", trigger_tokens if trigger_tokens is not None else MAX_CONTEXT_TOKENS),
         keep=("tokens", keep_tokens if keep_tokens is not None else SUMMARY_KEEP_TOKENS),
     )

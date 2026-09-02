@@ -15,3 +15,15 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "sentence-transformers>=6.0.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
