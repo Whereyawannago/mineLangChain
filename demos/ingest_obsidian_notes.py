@@ -4,7 +4,8 @@
     uv run python demos/ingest_obsidian_notes.py
 
 数据源（可改 OBSIDIAN_NOTES_DIR 切换）：
-    G:\\ObsidianNote\\LangChainNote\\langChain\\
+    G:\\ObsidianNote\\
+    —— 递归扫描所有 .md，包括 LangChainNote 与 BackEndNote
 
 输出位置：
     K:\\code\\langChainExample\\data\\chroma_db\\
@@ -31,11 +32,17 @@ from agent.rag import (
     ingest_documents,
 )
 
-# Obsidian 笔记位置（G 盘）
-OBSIDIAN_NOTES_DIR = Path(r"G:\ObsidianNote\LangChainNote\langChain")
+# Obsidian 笔记位置（G 盘）—— 整棵 vault 一起灌，方便混搜
+OBSIDIAN_NOTES_DIR = Path(r"G:\ObsidianNote")
 
 
 def main():
+    # Windows 默认 GBK，emoji 会被 codec 吃掉
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
     print("=" * 60)
     print("Obsidian 笔记 → Chroma 向量库")
     print("=" * 60)
