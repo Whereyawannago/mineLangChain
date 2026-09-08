@@ -23,6 +23,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent.rag import (
+    BM25_HASH_PATH,
+    BM25_INDEX_PATH,
     COLLECTION_NAME,
     PERSIST_DIR,
     build_embeddings,
@@ -48,6 +50,11 @@ def main():
     if PERSIST_DIR.exists():
         print(f"  ⚠️  删除旧向量库: {PERSIST_DIR}")
         shutil.rmtree(PERSIST_DIR)
+    # 同步清掉 BM25 索引和 sidecar hash，让下次启动走 hash_mismatch 路径（其实这里会走 missing）
+    for path in (BM25_INDEX_PATH, BM25_HASH_PATH):
+        if path.exists():
+            print(f"  ⚠️  删除旧 BM25 索引: {path}")
+            path.unlink()
 
     print(f"  → 加载 embedding 模型（首次运行会下载 ~93MB 到 {PERSIST_DIR.parent.parent / '.huggingface'}）...")
     t0 = time.time()

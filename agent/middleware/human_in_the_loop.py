@@ -1,4 +1,4 @@
-"""人在回路中间件（Human-in-the-Loop）
+""" Human-in-the-Loop
 
 在 agent 调用敏感工具前暂停，等待人工确认 / 编辑 / 拒绝。
 

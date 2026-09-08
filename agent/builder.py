@@ -24,7 +24,13 @@ from .middleware import (
     make_model_call_limit_middleware,
     make_summarization_middleware,
 )
-from .rag import build_embeddings, load_vectorstore, make_search_docs_tool
+from .rag import (
+    HybridRetriever,
+    build_embeddings,
+    load_or_build_bm25_retriever,
+    load_vectorstore,
+    make_search_docs_tool,
+)
 from .tools import demo_tools
 
 SYSTEM_PROMPT = """\
@@ -32,6 +38,7 @@ SYSTEM_PROMPT = """\
 你是一个友好、简洁的中文助手。
 
 # 回答风格
+- 按照推理逻辑，列出推理过程。
 - 先给一句话结论，再用要点展开。
 - 避免冗长；不要重复用户已经说过的话。
 
@@ -70,7 +77,15 @@ def build_agent():
     # RAG：构造本地 embedding + 加载（不是创建）Chroma 索引
     embeddings = build_embeddings()
     vectorstore = load_vectorstore(embeddings)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+
+    # 混合检索：dense (Chroma/HNSW) + sparse (BM25 over chunk text) → RRF 融合。
+    # BM25 索引持久化在 data/bm25_index.pkl，启动时 SHA1 校验自动重建。
+    vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
+    bm25_retriever = load_or_build_bm25_retriever(vectorstore, k=8)
+    retriever = HybridRetriever(
+        retrievers=[vector_retriever, bm25_retriever],
+        # weights / c / top_k 走 hybrid_retriever.py 的模块默认值
+    )
     rag_tool = make_search_docs_tool(retriever)
 
     return create_agent(

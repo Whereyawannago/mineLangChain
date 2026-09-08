@@ -24,6 +24,15 @@ from .ingestion import ingest_documents
 from .search_tool import make_search_docs_tool
 from .vectorstore import COLLECTION_NAME, PERSIST_DIR, load_vectorstore
 
+from .bm25_index import BM25_HASH_PATH, BM25_INDEX_PATH, load_or_build_bm25_retriever
+from .hybrid_retriever import (
+    DEFAULT_RRF_C,
+    DEFAULT_TOP_K,
+    DEFAULT_WEIGHTS,
+    DEDUP_CONTENT_PREFIX,
+    HybridRetriever,
+)
+
 __all__ = [
     "EMBED_MODEL_NAME",
     "PERSIST_DIR",
@@ -32,4 +41,13 @@ __all__ = [
     "ingest_documents",
     "load_vectorstore",
     "make_search_docs_tool",
+    # 混合检索（向量 + BM25 + RRF）
+    "BM25_HASH_PATH",
+    "BM25_INDEX_PATH",
+    "DEFAULT_RRF_C",
+    "DEFAULT_TOP_K",
+    "DEFAULT_WEIGHTS",
+    "DEDUP_CONTENT_PREFIX",
+    "HybridRetriever",
+    "load_or_build_bm25_retriever",
 ]
