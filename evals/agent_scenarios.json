@@ -1,0 +1,55 @@
+{
+  "_comment": "端到端效果回归场景集。每条覆盖一个能力，expect 里是确定性判据（工具调用/schema/引用校验），尽量避免依赖自由文本。用真实模型跑：uv run python -m evals.agent。判据以确定性为主，'keyword' 类判据仅作弱信号。turns[].thread 可给每条消息指定 thread_id（测跨会话长期记忆）；缺省用场景名当 thread_id。",
+  "_schema": {
+    "name": "场景名",
+    "capability": "覆盖的能力",
+    "kind": "agent(自由文本) 或 structured(结构化输出)",
+    "schema": "structured 时用：ChatReply / WeatherReport / RAGAnswer",
+    "include_rag": "是否挂 search_docs",
+    "turns": [{"text": "用户消息", "thread": "可选，覆盖 thread_id"}],
+    "expect": {"calls_tool": ["必须调用过的工具名"], "not_calls_tool": ["禁止调用的工具名"], "verify_sources": "true/false，结构化 RAGAnswer 时启用引用校验", "answer_contains": ["答案里应出现的子串，弱信号"]}
+  },
+  "scenarios": [
+    {
+      "name": "rag_on_topic_uses_search_tool",
+      "capability": "工具选择：相关话题应主动检索",
+      "kind": "agent",
+      "include_rag": true,
+      "turns": [{"text": "SummarizationMiddleware 的触发阈值是怎么配的？默认是多少？"}],
+      "expect": {"calls_tool": ["search_docs"]}
+    },
+    {
+      "name": "rag_sources_not_fabricated",
+      "capability": "RAG grounding：引用必须来自检索结果",
+      "kind": "structured",
+      "schema": "RAGAnswer",
+      "include_rag": true,
+      "turns": [{"text": "RAG 混合检索里 RRF 融合的默认权重是多少？"}],
+      "expect": {"calls_tool": ["search_docs"], "verify_sources": true}
+    },
+    {
+      "name": "structured_chat_minimal",
+      "capability": "结构化输出：返回 schema 实例而非自由文本",
+      "kind": "structured",
+      "schema": "ChatReply",
+      "include_rag": false,
+      "turns": [{"text": "用一句话介绍 LangChain。"}],
+      "expect": {"answer_contains": []}
+    },
+    {
+      "name": "long_term_memory_cross_session",
+      "capability": "长期记忆：跨会话复用，而非每次都问",
+      "kind": "agent",
+      "include_rag": false,
+      "turns": [
+        {"text": "请记住：我叫小明，而且回答尽量控制在 20 字以内。", "thread": "sess-save"},
+        {"text": "我叫什么名字？", "thread": "sess-ask-name"},
+        {"text": "我要求你回答多长？", "thread": "sess-ask-style"}
+      ],
+      "expect": {
+        "calls_tool": ["save_user_preference", "get_user_preference"],
+        "answer_contains": ["小明"]
+      }
+    }
+  ]
+}

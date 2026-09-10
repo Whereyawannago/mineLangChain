@@ -1,0 +1,59 @@
+{
+  "_comment": "检索质量评测的 golden 标签。relevant 填「期望命中」的文件名（精确匹配 metadata.source 的 basename）。语料是 G:\\ObsidianNote 下的 md。可随时增删；label 越贴合真实用户提问，recall/MRR 越有参考意义。",
+  "_schema": {"query": "str 用户会问的原话", "relevant": ["至少一个期望命中的文件名"], "note": "可选：这条为什么这么标"},
+  "cases": [
+    {
+      "query": "递归字符切分 RecursiveCharacterTextSplitter 的 chunk_size 和 overlap 应该怎么设？",
+      "relevant": ["RAG文档处理与切分策略.md"],
+      "note": "切分策略专文"
+    },
+    {
+      "query": "什么是 Parent-Child Chunk？为什么子块召回还要带上父块的上下文？",
+      "relevant": ["RAG文档处理与切分策略.md"]
+    },
+    {
+      "query": "文档从入库到检索前要经过哪些环节？解析、清洗、切分各自干什么？",
+      "relevant": ["RAG文档处理与切分策略.md"]
+    },
+    {
+      "query": "chunk 切太碎导致语义丢失，有什么办法缓解？",
+      "relevant": ["RAG文档处理与切分策略.md"]
+    },
+    {
+      "query": "BM25 关键词检索算法是怎么工作的？和词频统计有什么关系？",
+      "relevant": ["RAG向量索引算法和向量数据库.md"]
+    },
+    {
+      "query": "混合检索 Hybrid Search 里的 RRF 融合是怎么把多路结果合并排序的？",
+      "relevant": ["RAG向量索引算法和向量数据库.md"]
+    },
+    {
+      "query": "语义检索和关键词检索有什么区别？为什么 RAG 场景需要向量数据库？",
+      "relevant": ["RAG向量索引算法和向量数据库.md"]
+    },
+    {
+      "query": "Embedding 和向量检索是什么关系？向量相似度距离度量怎么选？",
+      "relevant": ["RAG向量索引算法和向量数据库.md"]
+    },
+    {
+      "query": "langchain 的 create_agent 有哪些参数？mineLangChain 项目是怎么调它的？",
+      "relevant": ["langChain.md"]
+    },
+    {
+      "query": "项目里已经完成了哪些内置中间件？",
+      "relevant": ["补充功能清单.md"]
+    },
+    {
+      "query": "结构化输出 structured output 做到哪一步了？ToolStrategy 是什么？",
+      "relevant": ["补充功能清单.md"]
+    },
+    {
+      "query": "动态 system prompt 的 @dynamic_prompt 思路记录在哪？",
+      "relevant": ["补充功能清单.md"]
+    },
+    {
+      "query": "SpringBoot 从零开始怎么学？学习指南的目录是怎么组织的？",
+      "relevant": ["SpringBoot学习指南.md"]
+    }
+  ]
+}
