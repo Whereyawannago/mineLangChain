@@ -13,6 +13,7 @@
 import os
 from pathlib import Path
 
+from langchain_core.embeddings import Embeddings
 from langchain_chroma import Chroma
 
 # 持久化目录：项目根 / data / chroma_db
@@ -25,7 +26,7 @@ PERSIST_DIR = _PERSIST_DIR
 COLLECTION_NAME = "mineLangChain"
 
 
-def load_vectorstore(embeddings) -> Chroma:
+def load_vectorstore(embeddings: Embeddings) -> Chroma:
     """加载已存在的 Chroma 向量库。
 
     用于 build_agent()。如果 PERSIST_DIR 不存在，会抛出异常——

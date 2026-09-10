@@ -123,6 +123,27 @@ def test_weight_sensitivity_flips_ranking():
     assert out2[0].page_content == "A"
 
 
+def test_zero_weight_serves_as_fallback_only():
+    """权重 0 的路不参与打分；当有权重的路返回空时才作为兜底来源。"""
+    fallback = _StubRetriever(docs=[_doc("F1"), _doc("F2")])   # 权重 0
+    primary = _StubRetriever(docs=[_doc("A")])                 # 权重 1
+
+    # 主路有结果：零权重兜底路完全被忽略
+    r1 = HybridRetriever(retrievers=[primary, fallback], weights=[1.0, 0.0])
+    out1 = r1.invoke("anything")
+    assert [d.page_content for d in out1] == ["A"]
+
+    # 主路为空：退回第一个非空零权重路的结果（全量返回，受 top_k 截断）
+    empty = _StubRetriever(docs=[])
+    r2 = HybridRetriever(retrievers=[empty, fallback], weights=[1.0, 0.0])
+    out2 = r2.invoke("anything")
+    assert [d.page_content for d in out2] == ["F1", "F2"]
+
+    # 全部路都空（含零权重兜底）：返回 []
+    r3 = HybridRetriever(retrievers=[empty, empty], weights=[1.0, 0.0])
+    assert r3.invoke("anything") == []
+
+
 def test_weights_length_must_match_retrievers():
     """weights 长度 != retrievers 长度应抛 ValueError。"""
     import pytest

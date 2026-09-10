@@ -11,12 +11,14 @@
 启动方式：uv run python main.py
 调试模式：uv run python main.py --debug   （额外打印 updates / values / events）
 HITL 模式：HumanInTheLoopMiddleware 会在 slow_lookup 调用前暂停并询问用户
+
+记忆持久化：默认写 data/memory/agent_memory.sqlite，进程重启不丢。用同一
+--user/--session 启动即可恢复这段对话；AGENT_MEMORY_BACKEND=memory 可退回内存态。
 """
 
 import argparse
 import json
 import sys
-import uuid
 
 # Windows 终端默认 GBK，改成 UTF-8 才能正常打印 emoji / 中文
 sys.stdout.reconfigure(encoding="utf-8")
@@ -24,7 +26,7 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 from langgraph.types import Command
 
-from agent import MAX_CONTEXT_TOKENS, build_agent
+from agent import UserContext, build_agent, new_thread_id
 
 _ALL_MODES = ("messages", "custom", "updates", "values", "events")
 
@@ -114,16 +116,20 @@ def _prompt_for_hitl(action_requests: list[dict]) -> dict | None:
     return {"decisions": decisions}
 
 
-def _drain_stream(agent, payload, config: dict, *, show_updates: bool) -> list:
+def _drain_stream(agent, payload, config: dict, *, show_updates: bool, context=None) -> list:
     """执行一次 agent.stream，分发五种 mode 事件，返回所有 (mode, event) 列表。
 
     不抛 GraphInterrupt —— LangGraph 在 stream 模式下把中断作为
     `__interrupt__` update 事件 yield 出来，stream 自身会正常结束。
+
+    context: UserContext（身份）；会被 preference 工具经 ToolRuntime 读取。
     """
     in_token_run = False
     chunks: list[tuple[str, object]] = []
 
-    for mode, event in agent.stream(payload, config=config, stream_mode=list(_ALL_MODES)):
+    for mode, event in agent.stream(
+        payload, config=config, context=context, stream_mode=list(_ALL_MODES)
+    ):
         chunks.append((mode, event))
 
         # ───── messages: LLM 逐 token ─────
@@ -213,7 +219,7 @@ def _detect_interrupt(chunks: list[tuple[str, object]]) -> list[dict]:
     return action_requests
 
 
-def stream_turn(agent, user_input: str, config: dict, *, show_updates: bool) -> None:
+def stream_turn(agent, user_input: str, config: dict, *, show_updates: bool, context=None) -> None:
     """调用一次 agent.stream，分发五种 stream_mode 事件，并处理 HITL 中断。
 
     流式调用 LangGraph 时，HumanInTheLoopMiddleware 触发的中断会被框架
@@ -223,7 +229,7 @@ def stream_turn(agent, user_input: str, config: dict, *, show_updates: bool) -> 
     payload = {"messages": [{"role": "user", "content": user_input}]}
 
     # 第一次 stream
-    chunks = _drain_stream(agent, payload, config, show_updates=show_updates)
+    chunks = _drain_stream(agent, payload, config, show_updates=show_updates, context=context)
 
     # 检查是否触发 HITL 中断
     action_requests = _detect_interrupt(chunks)
@@ -242,6 +248,7 @@ def stream_turn(agent, user_input: str, config: dict, *, show_updates: bool) -> 
         Command(resume=resume_value),
         config,
         show_updates=show_updates,
+        context=context,
     )
 
     # 二次中断（理论上罕见）：提示但不无限循环
@@ -252,20 +259,28 @@ def stream_turn(agent, user_input: str, config: dict, *, show_updates: bool) -> 
 def main() -> None:
     parser = argparse.ArgumentParser(description="LangChain 流式对话演示")
     parser.add_argument("--debug", action="store_true", help="额外打印每步 state 增量")
+    parser.add_argument("--user", default=None, help="用户 ID（默认 local-dev）")
+    parser.add_argument("--session", default=None,
+                        help="会话 ID（缺省随机）。同一 user+session 复用同一段短期记忆")
     args = parser.parse_args()
 
     agent = build_agent()
 
-    # 同 thread_id 内的多轮对话共享短期记忆
-    thread_id = f"session-{uuid.uuid4().hex[:8]}"
+    # 身份：user_id 决定长期记忆命名空间；thread_id=<user>:<session> 决定短期记忆。
+    # 传同一 --session 可跨进程恢复这段对话（默认 sqlite 后端）。
+    from agent.context import DEFAULT_USER_ID  # 局部导入，避免顶层依赖
+
+    user_id = args.user or DEFAULT_USER_ID
+    thread_id = new_thread_id(user_id, args.session)
+    context = UserContext(user_id=user_id, thread_id=thread_id)
     config = {"configurable": {"thread_id": thread_id}}
 
-    print(f"=== 会话 ID：{thread_id} ===")
-    print("=== 五类上下文管理 + 五类数据流 + 内置中间件三件套 ===")
+    print(f"=== 用户：{user_id} | 会话 ID：{thread_id} ===")
+    print("=== 短期/长期记忆 + RAG + 内置中间件三件套 + 五种 stream_mode ===")
     print("  中间件已启用:")
     print("    1) ModelCallLimitMiddleware  — thread_limit=15, run_limit=20")
     print("    2) HumanInTheLoopMiddleware  — slow_lookup 调用前询问")
-    print("    3) make_trim_middleware      — 超 2000 token 自动裁剪")
+    print("    3) SummarizationMiddleware   — 超 2000 token 自动摘要老消息")
     print("  数据流（stream_mode）:")
     print('    1) "messages" —— LLM 逐 token 输出')
     print('    2) "custom"   —— 工具内 get_stream_writer 推送')
@@ -294,7 +309,7 @@ def main() -> None:
             continue
 
         try:
-            stream_turn(agent, user_input, config, show_updates=args.debug)
+            stream_turn(agent, user_input, config, show_updates=args.debug, context=context)
         except Exception as e:
             print(f"\n  ✗ 出错了：{e}\n")
 

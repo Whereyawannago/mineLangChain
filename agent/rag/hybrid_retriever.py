@@ -40,6 +40,7 @@ class HybridRetriever(BaseRetriever):
     Args:
         retrievers: 子 retriever 列表，按顺序对应 weights。
         weights: 各路权重，长度必须等于 ``len(retrievers)``。
+            权重 0 表示该路不参与打分，仅当所有有权重的路都无结果时作为兜底来源。
         c: RRF 常数，控制"低排名惩罚"的力度。
         top_k: 最终返回的文档数。
     """
@@ -103,21 +104,30 @@ def _rrf_fuse(
     """RRF 融合：累加 ``w / (rank + c)`` 分数，按总分解排序，取 top_k。
 
     同一 chunk 在多路出现时分数相加；同 dedup_key 视为同一 chunk。
+
+    权重为 0 的路不参与打分，只收进兜底池：当所有有权重的路都返回空时，
+    退回使用第一个非空的零权重路结果 —— 对应「该路不贡献分数，但仍可作为唯一来源」。
     """
     scores: dict[str, float] = {}
     docs: dict[str, Document] = {}
+    zero_weight_outputs: list[Sequence[Document]] = []
 
     for output, w in zip(retriever_outputs, weights):
+        if w == 0:
+            # 零权重：不打分、不进 scores，仅记录其输出顺序作为兜底
+            zero_weight_outputs.append(output)
+            continue
         for rank, doc in enumerate(output, start=1):
-            if w == 0:
-                # 权重 0 = 该路不贡献分数（但仍可作为唯一来源）
-                if not docs:
-                    key = _dedup_key(doc)
-                    docs.setdefault(key, doc)
-                continue
             key = _dedup_key(doc)
             scores[key] = scores.get(key, 0.0) + w / (rank + c)
             docs.setdefault(key, doc)  # first-seen 优先
+
+    if not docs:
+        # 有权重的路一个结果都没有 → 用第一个非空的零权重路输出兜底
+        for output in zero_weight_outputs:
+            if output:
+                docs = {_dedup_key(d): d for d in output}
+                break
 
     if not docs:
         return []

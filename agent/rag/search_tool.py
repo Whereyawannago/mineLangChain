@@ -7,13 +7,14 @@
 """
 
 from langchain.tools import tool
+from langchain_core.retrievers import BaseRetriever
 
 
-def make_search_docs_tool(retriever):
+def make_search_docs_tool(retriever: BaseRetriever):
     """工厂：返回一个调用本地向量库的 @tool 函数。
 
     Args:
-        retriever: vectorstore.as_retriever(search_kwargs={"k": 4}) 的实例。
+        retriever: vectorstore.as_retriever(...) 或 HybridRetriever 实例。
 
     Returns:
         search_docs(query: str) -> str 工具函数，可直接传给 create_agent(tools=...)

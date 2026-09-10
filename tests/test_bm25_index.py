@@ -35,16 +35,13 @@ def _mock_chroma(documents: list[str]) -> MagicMock:
     ids = [f"id_{i}" for i in range(len(documents))]
 
     def _get(include=None, **kwargs):
-        result = {"documents": list(documents), "metadatas": list(metas), "ids": list(ids)}
-        if include is not None:
-            allowed = set(include) if isinstance(include, list) else {include}
-            # include=[] 表示只要 ids
-            if allowed and "documents" not in allowed:
-                result.pop("documents", None)
-            if allowed and "metadatas" not in allowed:
-                result.pop("metadatas", None)
-            if "ids" not in allowed and "ids" in allowed:
-                result.pop("ids", None)
+        # 模拟 Chroma.get 语义：ids 恒返回，include 决定额外返回哪些字段
+        result = {"ids": list(ids)}
+        if include:
+            if "documents" in include:
+                result["documents"] = list(documents)
+            if "metadatas" in include:
+                result["metadatas"] = list(metas)
         return result
 
     vs.get.side_effect = _get

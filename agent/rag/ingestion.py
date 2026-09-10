@@ -13,6 +13,7 @@ from pathlib import Path
 
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 
 from .vectorstore import COLLECTION_NAME, PERSIST_DIR
 from langchain_chroma import Chroma
@@ -60,7 +61,7 @@ def split_documents(
     return splitter.split_documents(docs)
 
 
-def ingest_documents(source_dir: str | Path, embeddings) -> Chroma:
+def ingest_documents(source_dir: str | Path, embeddings: Embeddings) -> Chroma:
     """一站式管道：load → split → embed → store。
 
     ⚠️ 每次调用都会用 from_documents 创建新 collection，
