@@ -27,7 +27,12 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 from langchain.agents import create_agent
 
-from agent.context import create_checkpointer, create_store, preference_tools
+from agent.context import (
+    UserContext,
+    create_checkpointer,
+    create_store,
+    preference_tools,
+)
 from agent.llm import build_llm
 from agent.middleware import (
     make_human_in_the_loop_middleware,
@@ -138,6 +143,7 @@ def main() -> None:
 
     thread_id = "demo-long-conversation"
     config = {"configurable": {"thread_id": thread_id}}
+    context = UserContext(user_id="demo-long-conversation", thread_id=thread_id)
 
     prev_msg_count = 0
     for turn_idx, user_msg in enumerate(SCRIPT, start=1):
@@ -147,6 +153,7 @@ def main() -> None:
         result = agent.invoke(
             {"messages": [{"role": "user", "content": user_msg}]},
             config=config,
+            context=context,
         )
 
         messages = result["messages"]

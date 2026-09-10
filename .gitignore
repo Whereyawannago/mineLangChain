@@ -46,3 +46,6 @@ env/
 # RAG（本地 Chroma 向量库 + HuggingFace 模型缓存，不上传）
 data/
 .huggingface/
+
+# Eval 运行产物（golden 标签保留，跑出来的结果不提交）
+evals/results/

@@ -3,8 +3,9 @@
 按官方文档（docs.langchain.com）实现：
 
 上下文管理（非中间件）：
-    1. 短期记忆  —— checkpointer + thread_id 多轮对话
-    2. 长期记忆  —— Store + 偏好工具，跨会话持久化
+    1. 短期记忆  —— checkpointer（默认 SqliteSaver，跨进程存活）+ thread_id 多轮对话
+    2. 长期记忆  —— Store（默认 SqliteStore）+ 偏好工具，按 user_id 隔离、跨会话持久化
+    3. 请求身份  —— UserContext / thread_id 由 user_id+session 生成（不再硬编码/随机）
 
 中间件（agent.middleware 子包）：
     1. 模型调用上限  —— 防止 agent 死循环
@@ -31,7 +32,27 @@ load_dotenv()
 _HF_HOME = Path(__file__).resolve().parent.parent / ".huggingface"
 os.environ.setdefault("HF_HOME", str(_HF_HOME))
 
-from .builder import build_agent
+from .builder import build_agent, build_structured_agent
+from .context import UserContext, new_thread_id
 from .middleware import MAX_CONTEXT_TOKENS
+from .structured import (
+    ChatReply,
+    RAGAnswer,
+    WeatherReport,
+    get_schemas,
+    verify_rag_sources,
+)
 
-__all__ = ["build_agent", "MAX_CONTEXT_TOKENS"]
+__all__ = [
+    "build_agent",
+    "build_structured_agent",
+    # 身份 / 记忆持久化
+    "UserContext",
+    "new_thread_id",
+    "MAX_CONTEXT_TOKENS",
+    "ChatReply",
+    "RAGAnswer",
+    "WeatherReport",
+    "get_schemas",
+    "verify_rag_sources",
+]
