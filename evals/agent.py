@@ -26,10 +26,11 @@ _PROJECT = Path(__file__).resolve().parents[1]
 if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
-# 在检查 API key 之前 import agent 包 —— `agent/__init__.py` 会模块级执行
-# `load_dotenv()`，把项目根 .env 加载到 os.environ；否则 _has_key() 在 import
-# 完成前看到的是空环境，会误报"缺少 ANTHROPIC_API_KEY"。
+# ⚠️ 必须在检查 API key 之前调 bootstrap_runtime()（main() 的第一件事）。
+# 早先这里靠 `import agent` 的模块级 load_dotenv() 副作用把 .env 带进环境；
+# 那个副作用已经移除（见 agent/bootstrap.py），改成入口显式调用。
 from evals.lib import (  # noqa: E402
+    bootstrap_runtime,
     collect_tool_calls,
     enable_tracing_if_configured,
     ensure_results_dir,
@@ -41,7 +42,7 @@ from evals.lib import (  # noqa: E402
     stamp,
     write_jsonl,
 )
-import agent  # noqa: E402, F401  -- 副作用：触发 agent/__init__.py 里的 load_dotenv()
+from agent.context import set_current_context, reset_current_context  # noqa: E402
 
 
 def _has_key() -> bool:
@@ -78,10 +79,16 @@ def _run_scenario(scenario: dict, run_id: str) -> dict:
         turn_thread = turn.get("thread") or default_thread
         thread_id = f"{scope}-{turn_thread}"   # run 唯一 → 跨 run 不串味，场景内按 turn 分会话
         config = {"configurable": {"thread_id": thread_id}}
-        # 场景内所有 turn 同属一个 eval 用户（长期记忆跨 thread 共享），user 带 run_id 隔离
-        context = identity_context(run_id, scenario["name"], thread_id)
-        result = agent.invoke({"messages": [{"role": "user", "content": turn["text"]}]},
-                              config=config, context=context)
+        # 场景内所有 turn 同属一个 eval 用户（长期记忆跨 thread 共享），user 带 run_id 隔离。
+        # 场景可显式指定 role（默认 user，不放行全集；ACL 才有效）。
+        ctx = identity_context(run_id, scenario["name"], thread_id,
+                               role=scenario.get("role", "user"))
+        token = set_current_context(ctx)
+        try:
+            result = agent.invoke({"messages": [{"role": "user", "content": turn["text"]}]},
+                                  config=config, context=ctx)
+        finally:
+            reset_current_context(token)
         messages = result.get("messages", [])
         all_calls.extend(collect_tool_calls(messages))
         finals.append(final_text(messages))
@@ -143,6 +150,7 @@ def _run_scenario(scenario: dict, run_id: str) -> dict:
 
 def main() -> None:
     ensure_utf8()
+    bootstrap_runtime()
     tracing = enable_tracing_if_configured()
     print("LangSmith tracing: " + ("ON" if tracing else "off（设 LANGSMITH_API_KEY 可开）"))
 

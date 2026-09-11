@@ -7,11 +7,12 @@
   1. **命名空间按 user_id 隔离**：``("user_preferences", <user_id>)``。
      早期用模块级常量 ``USER_ID = "demo-user"``，所有用户共享一份偏好——那是 bug 不是特性。
      user_id 现在从请求上下文取（``context.identity.user_id_from_runtime``）。
-  2. **后端默认 SqliteStore**：写 ``data/memory/agent_memory.sqlite``，进程重启仍在。
+  2. **后端默认 SqliteStore**：写 ``data/memory/store.sqlite``，进程重启仍在。
      早期 InMemoryStore 只在同进程内跨会话有效，docstring 宣称的"跨会话持久化"并不成立。
 
 环境变量：AGENT_MEMORY_BACKEND=memory 退回 InMemoryStore（测试/CI）；
-          AGENT_MEMORY_DB=<path> 自定义 sqlite 文件。
+          AGENT_MEMORY_STORE_DB=<path> 自定义 store 的 sqlite 文件
+          （与 checkpointer 的 AGENT_MEMORY_DB 分开，避免跨连接写锁冲突）。
 
 生产多实例：换 ``langgraph.store.postgres.PostgresStore``（见 README「生产化」）。
 """

@@ -15,12 +15,16 @@ minimax 的 ``/v1/embeddings``（协议不是 OpenAI 标准的 ``data[*].embeddi
    如果机器无法出网（DNS / 防火墙），请提前手动放模型到本地缓存目录。
 """
 
-import os
+from agent.bootstrap import configure_hf_cache
 
-# 把 HF 缓存重定向到项目内 .huggingface/（已在 .gitignore 里），不污染用户目录
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
-os.environ.setdefault("HF_HOME", os.path.join(_PROJECT_ROOT, ".huggingface"))
+# HF 缓存重定向到项目内 .huggingface/（已在 .gitignore 里），不污染用户目录。
+#
+# 注意：**权威调用点在 ``agent/__init__.py`` 顶部**。huggingface_hub 在 import 期就把
+# HF_HOME 固化成模块常量，而 langchain_core 会经 transformers 把它拖进来 —— 本文件
+# 执行到这里时早已固化完毕。这里再调一次只是幂等兜底（万一有人把本模块当独立脚本
+# 目录下的东西直接 import），真正生效的是 agent 包 __init__ 里那一次。
+# configure_hf_cache() 会在发现「固化值与期望值不一致」时打 WARNING，便于定位。
+configure_hf_cache()
 
 from langchain_huggingface import HuggingFaceEmbeddings  # noqa: E402
 

@@ -22,11 +22,13 @@
 
 from __future__ import annotations
 
-import re
-from typing import Annotated, Any
+import logging
+from typing import Annotated, Any, Mapping
 
 from langchain.agents.structured_output import ToolStrategy
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 # ────────────────────────────── Schema 定义 ──────────────────────────────
@@ -137,39 +139,43 @@ def get_default_schema() -> type[BaseModel]:
 # ToolStrategy 只保证「输出形状符合 schema」，不保证字段内容可信——尤其 RAGAnswer.sources
 # 模型可以随手编造。verify_rag_sources() 把「这一轮 search_docs 真实返回过的来源路径」当作
 # 事实基线，凡是不在基线里的 sources 一律判定为伪造并剔除。
-
-
-# search_docs 工具输出里的行格式：`[1] 来源: <path>`（见 agent.rag.search_tool）
-_SOURCE_LINE_RE = re.compile(r"^\s*\[\d+\]\s*来源:\s*(.+?)\s*$")
-# search_docs 命中时的正文标记（用于兜底识别工具消息）
-_RETRIEVAL_MARKER = "从本地知识库检索到"
+#
+# 基线从 **ToolMessage.artifact** 里取，而不是用正则去解析工具输出的文本：
+#   - 旧实现匹配 ``^[n] 来源: <path>$``，基线绑在「给人看的字符串格式」上；
+#     search_tool.py 一改措辞（比如「来源」换成「source」），校验不会报错，
+#     只会永远匹配不到 → 基线恒为空 → 所有真实引用被当成伪造剔除（或反过来被绕过）。
+#   - artifact 是 search_docs 用 ``response_format="content_and_artifact"`` 显式挂上的
+#     结构化契约（见 agent/rag/search_tool.py 的 build_artifact），与展示格式解耦。
 
 
 def _norm_source_path(path: str) -> str:
     """来源路径归一化：反斜杠转正斜杠、去首尾空白。"""
-    return path.replace("\\", "/").strip()
+    return str(path).replace("\\", "/").strip()
+
+
+def _artifact_sources(msg: Any) -> list[str]:
+    """从一条消息的 artifact 里取出检索来源清单；不是检索类工具消息则返回空。"""
+    artifact = getattr(msg, "artifact", None)
+    if not isinstance(artifact, Mapping):
+        return []
+    raw = artifact.get("sources")
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, (list, tuple, set)):
+        return []
+    return [str(s) for s in raw if s]
 
 
 def _collect_retrieved_sources(result: dict[str, Any]) -> set[str]:
-    """从 invoke 返回的消息流里，收集 search_docs 真实返回过的来源路径。
+    """从 invoke 返回的消息流里，收集检索工具真实返回过的来源路径。
 
-    只认形如 ``[n] 来源: <path>`` 的行（这是工具在片段头部统一打的前缀），
-    避免把检索正文里恰好出现「来源:」的文字也误当来源。
+    只认 ``type == "tool"`` 且 artifact 带 ``sources`` 键的消息 —— 这已经是 search_docs
+    的专属契约，不需要再按工具名做二次过滤（将来加别的检索类工具也能自动生效）。
     """
     found: set[str] = set()
     for msg in result.get("messages", []):
-        content = getattr(msg, "content", "")
-        if isinstance(content, list):
-            # 多模态内容块：拼出 text 部分
-            content = "".join(
-                b.get("text", "") for b in content if isinstance(b, dict)
-            )
-        if not isinstance(content, str) or _RETRIEVAL_MARKER not in content:
+        if getattr(msg, "type", None) != "tool":
             continue
-        for line in content.splitlines():
-            m = _SOURCE_LINE_RE.match(line)
-            if m:
-                found.add(_norm_source_path(m.group(1)))
+        for src in _artifact_sources(msg):
+            found.add(_norm_source_path(src))
     return found
 
 
@@ -180,7 +186,8 @@ def verify_rag_sources(
 ) -> tuple[Any, list[str]]:
     """校验结构化输出里的引用来源没被模型伪造，剔除不存在的来源。
 
-    基线 = 本轮 search_docs 工具消息里真正出现过的 ``[n] 来源: <path>`` 集合。
+    基线 = 本轮检索工具消息 ``ToolMessage.artifact["sources"]`` 的集合
+    （由 ``agent/rag/search_tool.py`` 的 ``build_artifact`` 写入）。
     凡是 ``structured_response.sources`` 里不在该集合内的路径，视为模型编造。
 
     Args:
@@ -195,8 +202,12 @@ def verify_rag_sources(
             没有伪造时就是原实例。
           - ``invalid_sources``：被判定为伪造、已剔除的来源列表；空 = 全部通过。
 
-    局限说明：基线取自返回消息流里**所有** search_docs 输出（含历史轮次），
-    因此「本轮没检索到、但过去某轮检索到过」的同名来源不会被判为伪造。
+    局限说明：
+      - 基线取自返回消息流里**所有**检索工具输出（含历史轮次），因此「本轮没检索到、
+        但过去某轮检索到过」的同名来源不会被判为伪造。
+      - 只认带 artifact 的工具消息。从旧版本 checkpoint 里恢复出来的历史 ToolMessage
+        没有 artifact（那时还没上 content_and_artifact），会被当成「无基线」→
+        引用全判伪造。这是刻意的 fail-closed：宁可让用户看不到引用，也不放过编造。
     """
     resp = result.get("structured_response")
     if resp is None or not isinstance(resp, schema):
@@ -214,6 +225,10 @@ def verify_rag_sources(
 
     if not invalid:
         return resp, []
+    logger.warning(
+        "[structured] 剔除 %d 个伪造引用（基线 %d 条）：%s",
+        len(invalid), len(retrieved), invalid,
+    )
     verified = resp.model_copy(update={"sources": valid})
     return verified, invalid
 

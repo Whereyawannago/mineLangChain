@@ -27,11 +27,15 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 from langchain.agents import create_agent
 
+from agent import bootstrap
 from agent.context import (
+    ROLE_ADMIN,
     UserContext,
     create_checkpointer,
     create_store,
     preference_tools,
+    reset_current_context,
+    set_current_context,
 )
 from agent.llm import build_llm
 from agent.middleware import (
@@ -39,37 +43,15 @@ from agent.middleware import (
     make_model_call_limit_middleware,
     make_summarization_middleware,
 )
+# SYSTEM_PROMPT 从单一来源 import，不在 demo 里再抄一份。
+# （早先 demo 里存了一份副本，已经和 builder 的版本漂移了 —— 少了「列出推理过程」一条，
+#   而且没有任何测试会发现这种漂移。）
+from agent.prompts import SYSTEM_PROMPT
 from agent.tools import demo_tools
 
 # 把 threshold 调小，让演示快速触发
 DEMO_TRIGGER_TOKENS = 500
 DEMO_KEEP_TOKENS = 100
-
-SYSTEM_PROMPT = """\
-# 角色
-你是一个友好、简洁的中文助手。
-
-# 回答风格
-- 先给一句话结论，再用要点展开。
-- 避免冗长；不要重复用户已经说过的话。
-
-# 工具使用规则（按优先级）
-1. **记忆**
-   - 用户提到他的偏好（名字、语言、称呼等）→ 调用 `save_user_preference` 持久化。
-   - 用户问起他之前的偏好 → 调用 `get_user_preference` 查询。
-2. **本地知识检索**
-   - 用户问及 LangChain / LangGraph / 项目本地资料 / "项目里有什么" →
-     先调用 `search_docs` 查本地知识库，**必须基于检索结果回答**，不要凭空发挥。
-3. **演示工具**
-   - 用户明确要求做一次慢速查询 → 调用 `slow_lookup`。
-
-# 兜底流程（重要）
-- 如果你的内置知识能直接回答，优先直接回答。
-- 如果你不确定或问题超出内置知识：
-  1. 先尝试 `search_docs` 查本地知识库。
-  2. 若本地知识库也没有结果，明确告诉用户"这个我目前查不到"，并建议他补充资料或换个问法。
-- 不要凭空编造 API、配置项、代码细节。
-"""
 
 
 # ============ 脚本化对话 ============
@@ -116,6 +98,9 @@ def render(content) -> str:
 
 
 def main() -> None:
+    # 入口引导：.env → HF 缓存 → 日志（build_llm 要读 ANTHROPIC_API_KEY）
+    bootstrap()
+
     print("=" * 70)
     print("假长对话演示 —— SummarizationMiddleware 自动触发")
     print("=" * 70)
@@ -143,8 +128,18 @@ def main() -> None:
 
     thread_id = "demo-long-conversation"
     config = {"configurable": {"thread_id": thread_id}}
-    context = UserContext(user_id="demo-long-conversation", thread_id=thread_id)
+    # role=admin 让 demo 完整看到所有 RAG 内容（ACL 是 fail-closed 的，不显式给角色就什么都看不到）
+    context = UserContext(user_id="demo-long-conversation", thread_id=thread_id, role=ROLE_ADMIN)
+    ctx_token = set_current_context(context)
+    try:
+        _run_script(agent, config, context)
+    finally:
+        # ContextVar 设了就必须 reset —— 不 reset 在服务端就是泄漏 + 身份串台
+        reset_current_context(ctx_token)
 
+
+def _run_script(agent, config: dict, context: UserContext) -> None:
+    """跑完整本对话（从 main() 拆出来，好让 ContextVar 的 set/reset 能用 try/finally 包住）。"""
     prev_msg_count = 0
     for turn_idx, user_msg in enumerate(SCRIPT, start=1):
         print(f"\n━━━ 第 {turn_idx:02d} 轮 ─── 用户：{user_msg[:50]}…")

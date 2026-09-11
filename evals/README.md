@@ -52,15 +52,38 @@ uv run python -m evals.latency --cold --iter 3
 ```bash
 # Windows PowerShell
 $env:LANGSMITH_API_KEY="lsv2_..."
-# 或 .env 里写 LANGSMITH_API_KEY=...（agent/__init__ 的 load_dotenv 会自动读）
+# 或 .env 里写 LANGSMITH_API_KEY=...（各 runner 开头的 bootstrap_runtime() 会读）
 ```
 
 运行时首行会打印 `LangSmith tracing: ON/OFF`。
 
+## 引导（bootstrap）
+
+`import agent` 不再偷偷 `load_dotenv()`，所以四个 runner 都在 `main()` 开头调
+`evals.lib.bootstrap_runtime()`（内部就是 `agent.bootstrap()`：.env → HF 缓存 → 日志）。
+新增 runner 时别忘这一行，否则 `.env` 里的 key 读不到。
+
+身份也统一走 `evals.lib.identity_context(run_id, user, thread, role="user")`：
+它把 `run_id` 编进 `user_id`（`eval-<user>-<run_id>`）保证多次 run 不互相污染记忆，
+并显式带上 `role` —— ACL 是 fail-closed 的，不设上下文就一条文档也拿不到。
+
+## 角色与 ACL
+
+`evals.retrieval` 跑的是**故意未挂 ACL** 的底层 retriever（评估检索能力本身，
+不受身份策略影响；要是包了 ACLRetriever，没上下文的评测会直接拿到空集）。
+`evals.agent` / `evals.memory` 走完整 agent，retriever
+被 `ACLRetriever` 包了一层，按当前请求的 `role` 过滤：
+
+- `evals.agent` 默认每个场景用 `role="user"`（除非 scenario JSON 里显式 `"role": "admin"`）
+- `evals.memory` 的 with_memory 变体用 `admin`、baseline 用 `user`，对照"有记忆工具 + 全集 RAG" vs "无记忆 + 受限 RAG"的 token 差异
+- `evals.latency` 默认 `admin`（不挡 RAG 看全库，看纯延迟）
+
+记忆 ACL 不会影响评测——长期记忆本来就按 `user_id`（eval 唯一）隔离，跟 role 正交。
+
 ## 记忆后端（会影响评测）
 
 agent 默认把短期/长期记忆写 SQLite（`data/memory/`），所以**评测会真的落盘**。
-为了不让多次 run 互相污染，各 runner 都用「run 唯一」的用户/thread 前缀（`eval-<run_id>-*`）。
+为了不让多次 run 互相污染，各 runner 都用「run 唯一」的用户/thread 前缀（`eval-<user>-<run_id>`）。
 想完全退出磁盘（更快、更干净）：
 
 ```bash

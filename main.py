@@ -12,12 +12,16 @@
 调试模式：uv run python main.py --debug   （额外打印 updates / values / events）
 HITL 模式：HumanInTheLoopMiddleware 会在 slow_lookup 调用前暂停并询问用户
 
-记忆持久化：默认写 data/memory/agent_memory.sqlite，进程重启不丢。用同一
+记忆持久化：默认写 data/memory/（checkpoints.sqlite + store.sqlite），进程重启不丢。用同一
 --user/--session 启动即可恢复这段对话；AGENT_MEMORY_BACKEND=memory 可退回内存态。
+
+⚠️ 入口脚本必须先调 ``bootstrap()``：``agent`` 包 import 时不再偷偷 load_dotenv / 改环境
+   （见 agent/bootstrap.py），所以 .env 里的 ANTHROPIC_API_KEY 靠这一句才进得去。
 """
 
 import argparse
 import json
+import logging
 import sys
 
 # Windows 终端默认 GBK，改成 UTF-8 才能正常打印 emoji / 中文
@@ -26,7 +30,17 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 from langgraph.types import Command
 
-from agent import UserContext, build_agent, new_thread_id
+from agent import UserContext, bootstrap, build_agent, new_thread_id
+from agent.context import (
+    DEFAULT_USER_ID,
+    ROLE_ADMIN,
+    ROLE_USER,
+    VALID_ROLES,
+    reset_current_context,
+    set_current_context,
+)
+
+logger = logging.getLogger(__name__)
 
 _ALL_MODES = ("messages", "custom", "updates", "values", "events")
 
@@ -262,25 +276,45 @@ def main() -> None:
     parser.add_argument("--user", default=None, help="用户 ID（默认 local-dev）")
     parser.add_argument("--session", default=None,
                         help="会话 ID（缺省随机）。同一 user+session 复用同一段短期记忆")
+    parser.add_argument("--role", default=None, choices=list(VALID_ROLES),
+                        help="角色：admin 见所有 RAG 数据；user 仅白名单目录（见 identity.py）")
+    parser.add_argument("--log-level", default=None,
+                        help="日志级别（DEBUG/INFO/WARNING/ERROR），缺省读 AGENT_LOG_LEVEL")
     args = parser.parse_args()
+
+    # 入口引导：.env → HF 缓存 → 日志。必须早于 build_agent()（它要读 ANTHROPIC_API_KEY）。
+    bootstrap(log_level=args.log_level or ("DEBUG" if args.debug else None))
 
     agent = build_agent()
 
-    # 身份：user_id 决定长期记忆命名空间；thread_id=<user>:<session> 决定短期记忆。
-    # 传同一 --session 可跨进程恢复这段对话（默认 sqlite 后端）。
-    from agent.context import DEFAULT_USER_ID  # 局部导入，避免顶层依赖
-
+    # 身份：user_id 决定长期记忆命名空间；thread_id=<user>:<session> 决定短期记忆；
+    # role 决定 RAG 检索时的可见文档集合。
     user_id = args.user or DEFAULT_USER_ID
     thread_id = new_thread_id(user_id, args.session)
-    context = UserContext(user_id=user_id, thread_id=thread_id)
+    context = UserContext(user_id=user_id, thread_id=thread_id,
+                          role=args.role or ROLE_USER)
     config = {"configurable": {"thread_id": thread_id}}
 
-    print(f"=== 用户：{user_id} | 会话 ID：{thread_id} ===")
+    # ContextVar 是请求维度的：设一次，retriever/工具每次 invoke 自动读。
+    # 必须配 try/finally reset —— CLI 单用户场景不 reset 看不出问题，但这个模式一旦被
+    # 复制到服务端（每请求 set），不 reset 就是 ContextVar 泄漏 + 身份串台。
+    ctx_token = set_current_context(context)
+    try:
+        _repl(agent, config, context, show_updates=args.debug)
+    finally:
+        reset_current_context(ctx_token)
+
+
+def _repl(agent, config: dict, context: UserContext, *, show_updates: bool) -> None:
+    """交互式对话循环（从 main() 拆出来，好让 ContextVar 的 set/reset 能用 try/finally 包住）。"""
+    print(f"=== 用户：{context.user_id} | 角色：{context.role} | 会话 ID：{context.thread_id} ===")
     print("=== 短期/长期记忆 + RAG + 内置中间件三件套 + 五种 stream_mode ===")
     print("  中间件已启用:")
     print("    1) ModelCallLimitMiddleware  — thread_limit=15, run_limit=20")
     print("    2) HumanInTheLoopMiddleware  — slow_lookup 调用前询问")
     print("    3) SummarizationMiddleware   — 超 2000 token 自动摘要老消息")
+    scope = "全集（admin）" if context.role == ROLE_ADMIN else "user 白名单目录"
+    print(f"  RAG 可见范围：{scope}")
     print("  数据流（stream_mode）:")
     print('    1) "messages" —— LLM 逐 token 输出')
     print('    2) "custom"   —— 工具内 get_stream_writer 推送')
@@ -309,8 +343,10 @@ def main() -> None:
             continue
 
         try:
-            stream_turn(agent, user_input, config, show_updates=args.debug, context=context)
+            stream_turn(agent, user_input, config, show_updates=show_updates, context=context)
         except Exception as e:
+            # 堆栈进日志（可接 ELK / CloudWatch），终端只给用户一行可读提示
+            logger.exception("[main] 本轮对话失败")
             print(f"\n  ✗ 出错了：{e}\n")
 
 

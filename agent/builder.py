@@ -11,7 +11,11 @@
     )
 """
 
-from typing import TypeVar
+from __future__ import annotations
+
+import logging
+import threading
+from typing import Any, TypeVar
 
 from langchain.agents import create_agent
 from pydantic import BaseModel
@@ -28,7 +32,11 @@ from .middleware import (
     make_model_call_limit_middleware,
     make_summarization_middleware,
 )
+# SYSTEM_PROMPT 的单一来源在 agent/prompts.py；这里 re-export 一份，兼容既有的
+# `from agent.builder import SYSTEM_PROMPT` 写法（evals / demos 都这么导）。
+from .prompts import SYSTEM_PROMPT
 from .rag import (
+    ACLRetriever,
     HybridRetriever,
     build_embeddings,
     load_or_build_bm25_retriever,
@@ -38,53 +46,53 @@ from .rag import (
 from .structured import make_response_format
 from .tools import demo_tools
 
+logger = logging.getLogger(__name__)
+
 _SchemaT = TypeVar("_SchemaT", bound=BaseModel)
+
+__all__ = ["SYSTEM_PROMPT", "build_agent", "build_structured_agent", "reset_singletons"]
 
 # 进程内复用 checkpointer / store —— 避免每次 build_* 都新开一条 sqlite 连接，
 # 也保证同一进程内所有 agent 共用同一份持久化状态（多用户服务常见做法）。
-_CHECKPOINTER = None
-_STORE = None
+#
+# 用双检锁（double-checked locking）而不是裸 `if x is None`：FastAPI + uvicorn 多线程、
+# 或者任何并发首次调用的场景下，裸检查会重复建连接、重复跑 `setup()` 建表（sqlite
+# 上还会直接撞 `database is locked`）。外层无锁快路径保证热路径零开销。
+_CHECKPOINTER: Any = None
+_STORE: Any = None
+_SINGLETON_LOCK = threading.Lock()
 
 
 def _get_checkpointer():
     global _CHECKPOINTER
     if _CHECKPOINTER is None:
-        _CHECKPOINTER = create_checkpointer()
+        with _SINGLETON_LOCK:
+            if _CHECKPOINTER is None:
+                logger.debug("[builder] creating checkpointer")
+                _CHECKPOINTER = create_checkpointer()
     return _CHECKPOINTER
 
 
 def _get_store():
     global _STORE
     if _STORE is None:
-        _STORE = create_store()
+        with _SINGLETON_LOCK:
+            if _STORE is None:
+                logger.debug("[builder] creating store")
+                _STORE = create_store()
     return _STORE
 
-SYSTEM_PROMPT = """\
-# 角色
-你是一个友好、简洁的中文助手。
 
-# 回答风格
-- 按照推理逻辑，列出推理过程。
-- 先给一句话结论，再用要点展开。
-- 避免冗长；不要重复用户已经说过的话。
+def reset_singletons() -> None:
+    """丢弃进程内复用的 checkpointer / store（主要给测试用）。
 
-# 工具使用规则（按优先级）
-1. **记忆**
-   - 用户提到他的偏好（名字、语言、称呼等）→ 调用 `save_user_preference` 持久化。
-   - 用户问起他之前的偏好 → 调用 `get_user_preference` 查询。
-2. **本地知识检索**
-   - 用户问及 LangChain / LangGraph / 项目本地资料 / "项目里有什么" →
-     先调用 `search_docs` 查本地知识库，**必须基于检索结果回答**，不要凭空发挥。
-3. **演示工具**
-   - 用户明确要求做一次慢速查询 → 调用 `slow_lookup`。
-
-# 兜底流程（重要）
-- 如果你的内置知识能直接回答，优先直接回答。
-- 如果你不确定或问题超出内置知识：
-  1. 先尝试 `search_docs` 查本地知识库。
-  2. 若本地知识库也没有结果，明确告诉用户"这个我目前查不到"，并建议他补充资料或换个问法。
-- 不要凭空编造 API、配置项、代码细节。
-"""
+    生产不需要调；测试里切了 AGENT_MEMORY_BACKEND / AGENT_MEMORY_DB 之后，
+    如果不调这个，下一次 build_agent() 仍会拿到旧后端的实例。
+    """
+    global _CHECKPOINTER, _STORE
+    with _SINGLETON_LOCK:
+        _CHECKPOINTER = None
+        _STORE = None
 
 
 # RAG 每路 retriever 的候选数（dense / sparse 各自取 k 个，再由 RRF 融合成 top_k）
@@ -92,20 +100,24 @@ _RETRIEVER_K = 8
 
 
 def _assemble_rag_tool():
-    """构造 search_docs 工具：混合检索（向量 + BM25）→ RRF 融合。
+    """构造 search_docs 工具：混合检索（向量 + BM25）→ RRF 融合 → ACL 过滤。
 
     两个 build_* 入口共用这一套装配，避免逻辑重复：
-    加载 Chroma → dense retriever + BM25 retriever → HybridRetriever → @tool。
+    加载 Chroma → dense retriever + BM25 retriever → HybridRetriever → ACLRetriever → @tool。
 
     说明：
       - BM25 索引持久化在 data/bm25_index.pkl，启动时按 Chroma 内容 SHA1 校验自动重建。
       - weights / c / top_k 走 hybrid_retriever.py 的模块默认值。
+      - **ACL 是 fail-closed 的**：本函数不做任何预检 invoke（那会因为没有请求上下文而
+        拿到空集），只负责装配；过滤发生在每次 query 时，读当前请求的 UserContext。
     """
     embeddings = build_embeddings()
     vectorstore = load_vectorstore(embeddings)
     vector_retriever = vectorstore.as_retriever(search_kwargs={"k": _RETRIEVER_K})
     bm25_retriever = load_or_build_bm25_retriever(vectorstore, k=_RETRIEVER_K)
-    retriever = HybridRetriever(retrievers=[vector_retriever, bm25_retriever])
+    base = HybridRetriever(retrievers=[vector_retriever, bm25_retriever])
+    # 包一层 ACL —— 每次 invoke 时按当前请求的 UserContext.role 过滤
+    retriever = ACLRetriever(base)
     return make_search_docs_tool(retriever)
 
 

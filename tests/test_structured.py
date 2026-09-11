@@ -21,7 +21,14 @@ from agent.structured import (
     make_response_format,
     verify_rag_sources,
 )
-from langchain_core.messages import ToolMessage
+from langchain_core.documents import Document
+from langchain_core.messages import AIMessage, ToolMessage
+
+from agent.rag.search_tool import (
+    SEARCH_DOCS_TOOL_NAME,
+    build_artifact,
+    format_retrieved_documents,
+)
 
 
 # ─────────────────────────── Schema 字段校验 ───────────────────────────
@@ -185,15 +192,22 @@ def _rag_result(messages, sources):
 
 
 def _search_docs_tool_message(paths: list[str]) -> ToolMessage:
-    """构造一条 search_docs 工具的返回消息，内容格式与 search_tool.py 一致。"""
-    chunks = "\n\n---\n\n".join(
-        f"[{i}] 来源: {p}\n这是第 {i} 段检索正文。" for i, p in enumerate(paths, 1)
+    """构造一条 search_docs 工具的返回消息，content 与 artifact 都按真实契约填。
+
+    直接用 ``search_tool.py`` 的 ``format_retrieved_documents`` / ``build_artifact`` 生成，
+    而不是在测试里手摹一份字符串 —— 手摹的那份一旦与生产格式漂移，测试会绿着通过、
+    生产却已经坏了。
+    """
+    docs = [
+        Document(page_content=f"这是第 {i} 段检索正文。", metadata={"source": p})
+        for i, p in enumerate(paths, 1)
+    ]
+    return ToolMessage(
+        content=format_retrieved_documents(docs),
+        tool_call_id="call_1",
+        name=SEARCH_DOCS_TOOL_NAME,
+        artifact=build_artifact(docs),
     )
-    content = (
-        f"以下是从本地知识库检索到的 {len(paths)} 个相关片段。"
-        f"请把它们当作参考资料回答用户问题：\n\n{chunks}"
-    )
-    return ToolMessage(content=content, tool_call_id="call_1", name="search_docs")
 
 
 def test_verify_rag_sources_passes_when_all_citations_retrieved() -> None:
@@ -241,22 +255,108 @@ def test_verify_rag_sources_flags_all_when_no_retrieval_happened() -> None:
     assert verified.sources == []
 
 
-def test_verify_rag_sources_ignores_body_lines_with_source_word() -> None:
-    """检索正文里恰好出现「来源:」的文字不能被误当来源。"""
+def test_verify_rag_sources_ignores_source_like_text_in_body() -> None:
+    """正文里恰好出现「来源:」字样的文字不能被误当来源 —— 基线只来自 artifact。"""
     retrieved = "G:/notes/a.md"
-    chunks = f"[1] 来源: {retrieved}\n正文里说：来源: 123 这是内容不是来源。"
-    content = (
-        "以下是从本地知识库检索到的 1 个相关片段。"
-        "请把它们当作参考资料回答用户问题：\n\n" + chunks
-    )
+    docs = [Document(page_content="正文里说：来源: 123 这是内容不是来源。",
+                     metadata={"source": retrieved})]
     result = _rag_result(
-        messages=[ToolMessage(content=content, tool_call_id="c1", name="search_docs")],
+        messages=[ToolMessage(
+            content=format_retrieved_documents(docs),
+            tool_call_id="c1",
+            name=SEARCH_DOCS_TOOL_NAME,
+            artifact=build_artifact(docs),
+        )],
         sources=[retrieved, "123"],
     )
     verified, invalid = verify_rag_sources(result)
-    # "123" 不是行首 [n] 来源: 前缀，不会进入基线 → 被判为伪造
+    # "123" 只存在于正文文字里，不在 artifact["sources"] → 判为伪造
     assert invalid == ["123"]
     assert verified.sources == [retrieved]
+
+
+def test_verify_rag_sources_does_not_parse_content_text() -> None:
+    """content 里写着来源、但 artifact 没有 → 仍然判伪造。
+
+    这条钉住了新旧实现的分界：旧实现用正则解析 content，会把正文里的路径当基线；
+    现在只认 artifact，模型就不能靠在正文里多印一行「来源: xxx」来自我背书。
+    """
+    claimed = "G:/notes/only-in-text.md"
+    result = _rag_result(
+        messages=[ToolMessage(
+            content=f"来源: {claimed}\n正文",
+            tool_call_id="c1",
+            name=SEARCH_DOCS_TOOL_NAME,
+            artifact={"schema_version": 1, "count": 0, "sources": [], "documents": []},
+        )],
+        sources=[claimed],
+    )
+    verified, invalid = verify_rag_sources(result)
+    assert invalid == [claimed]
+    assert verified.sources == []
+
+
+def test_verify_rag_sources_treats_legacy_message_without_artifact_as_no_baseline() -> None:
+    """旧 checkpoint 里恢复出来的 ToolMessage 没有 artifact → 基线为空，fail-closed。"""
+    result = _rag_result(
+        messages=[ToolMessage(content="[1] 来源: G:/notes/a.md", tool_call_id="c1",
+                              name=SEARCH_DOCS_TOOL_NAME)],
+        sources=["G:/notes/a.md"],
+    )
+    verified, invalid = verify_rag_sources(result)
+    assert invalid == ["G:/notes/a.md"]
+    assert verified.sources == []
+
+
+def test_verify_rag_sources_rejects_malformed_artifact_sources() -> None:
+    """artifact["sources"] 类型不对（字符串/缺失）时不能当基线，也不能抛异常。"""
+    for bad_artifact in ({"sources": "G:/notes/a.md"}, {"count": 1}, None):
+        result = _rag_result(
+            messages=[ToolMessage(content="x", tool_call_id="c1", name=SEARCH_DOCS_TOOL_NAME,
+                                  artifact=bad_artifact)],
+            sources=["G:/notes/a.md"],
+        )
+        verified, invalid = verify_rag_sources(result)
+        assert invalid == ["G:/notes/a.md"]
+        assert verified.sources == []
+
+
+def test_verify_rag_sources_collects_from_every_tool_message() -> None:
+    """多轮检索（或另一个检索类工具）的来源都要进基线；非工具消息忽略。"""
+    first, second = "G:/notes/a.md", "G:/notes/b.md"
+    other_tool = ToolMessage(
+        content="别的工具的输出",
+        tool_call_id="c2",
+        name="slow_lookup",
+        artifact={"sources": ["G:/notes/c.md"]},
+    )
+    result = _rag_result(
+        messages=[
+            AIMessage(content="我先查一下"),
+            _search_docs_tool_message([first]),
+            _search_docs_tool_message([second]),
+            other_tool,
+        ],
+        sources=[first, second, "G:/notes/c.md", "G:/notes/fake.md"],
+    )
+    verified, invalid = verify_rag_sources(result)
+    assert invalid == ["G:/notes/fake.md"]
+    assert verified.sources == [first, second, "G:/notes/c.md"]
+
+
+def test_verify_rag_sources_noop_when_sources_empty() -> None:
+    """模型没声明任何引用 → 无需校验，不报伪造。"""
+    result = _rag_result(messages=[], sources=[])
+    verified, invalid = verify_rag_sources(result)
+    assert invalid == []
+    assert verified is result["structured_response"]
+
+
+def test_verify_rag_sources_noop_when_structured_response_missing() -> None:
+    """没有 structured_response（模型直接回了文本）时不报错。"""
+    verified, invalid = verify_rag_sources({"messages": []})
+    assert verified is None
+    assert invalid == []
 
 
 def test_verify_rag_sources_noop_for_schema_without_sources() -> None:

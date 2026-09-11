@@ -26,9 +26,19 @@ from .backends import (
     use_memory_backend,
 )
 from .identity import (
+    DEFAULT_OBSIDIAN_ROOT,
     DEFAULT_USER_ID,
+    ROLE_ADMIN,
+    ROLE_USER,
+    VALID_ROLES,
+    Role,
     UserContext,
+    allowed_paths_for_role,
+    current_context,
     new_thread_id,
+    reset_current_context,
+    set_current_context,
+    user_allowed_dirs,
     user_id_from_context,
     user_id_from_runtime,
 )
@@ -43,9 +53,19 @@ from .short_term import create_checkpointer
 
 __all__ = [
     # 身份
+    "DEFAULT_OBSIDIAN_ROOT",
     "DEFAULT_USER_ID",
+    "ROLE_ADMIN",
+    "ROLE_USER",
+    "VALID_ROLES",
+    "Role",
     "UserContext",
+    "allowed_paths_for_role",
+    "current_context",
     "new_thread_id",
+    "reset_current_context",
+    "set_current_context",
+    "user_allowed_dirs",
     "user_id_from_context",
     "user_id_from_runtime",
     # 后端 / 路径

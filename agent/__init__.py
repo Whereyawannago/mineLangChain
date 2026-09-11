@@ -16,26 +16,38 @@ RAG（agent.rag 子包）：
     1. 本地向量库   —— Chroma 持久化
     2. @tool 检索   —— search_docs 让 agent 自主决定何时查
 
+⚠️ 本包 **import 时不读 .env、不配日志**（那些是入口脚本的事，见 agent/bootstrap.py）。
+   入口脚本请在最开头显式调用一次 ``agent.bootstrap()``。
+
+   唯一保留在 import 期的环境写入是 ``HF_HOME``（就在下面）：
+   ``huggingface_hub`` 在 import 期就把缓存根目录固化成模块常量，而 ``.builder``
+   会经 ``langchain_core → transformers`` 把它拖进来 —— 再晚就来不及了。
+   这不是配置，是缓存位置，且写入前用 ``setdefault``，不覆盖宿主进程已有的值。
+
 对外只需：
-    from agent import build_agent
+    from agent import bootstrap, build_agent
+
+    bootstrap()          # 加载 .env / 配 HF 缓存 / 配日志
+    agent = build_agent()
 """
 
-import os
-from pathlib import Path
+from .bootstrap import (
+    HF_CACHE_DIR,
+    PROJECT_ROOT,
+    bootstrap,
+    configure_hf_cache,
+    configure_logging,
+    load_env,
+)
 
-from dotenv import load_dotenv
+# 必须先于下面任何 langchain 相关的 import 执行 —— 原因见模块 docstring。
+configure_hf_cache()
 
-# 模块被 import 时加载 .env，确保所有子模块能读到环境变量
-load_dotenv()
-
-# 重定向 HuggingFace 模型缓存到项目内（不占 C 盘）
-_HF_HOME = Path(__file__).resolve().parent.parent / ".huggingface"
-os.environ.setdefault("HF_HOME", str(_HF_HOME))
-
-from .builder import build_agent, build_structured_agent
-from .context import UserContext, new_thread_id
-from .middleware import MAX_CONTEXT_TOKENS
-from .structured import (
+from .builder import build_agent, build_structured_agent  # noqa: E402
+from .context import UserContext, new_thread_id  # noqa: E402
+from .middleware import MAX_CONTEXT_TOKENS  # noqa: E402
+from .prompts import SYSTEM_PROMPT  # noqa: E402
+from .structured import (  # noqa: E402
     ChatReply,
     RAGAnswer,
     WeatherReport,
@@ -44,8 +56,17 @@ from .structured import (
 )
 
 __all__ = [
+    # 引导（入口脚本第一步）
+    "bootstrap",
+    "load_env",
+    "configure_hf_cache",
+    "configure_logging",
+    "PROJECT_ROOT",
+    "HF_CACHE_DIR",
     "build_agent",
     "build_structured_agent",
+    # 提示词（单一来源，见 agent/prompts.py）
+    "SYSTEM_PROMPT",
     # 身份 / 记忆持久化
     "UserContext",
     "new_thread_id",

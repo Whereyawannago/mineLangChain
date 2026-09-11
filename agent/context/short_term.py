@@ -3,7 +3,7 @@
 同一 thread_id 内的多轮消息由 create_agent 在 invoke/stream 时按
 ``config={"configurable": {"thread_id": ...}}`` 自动加载与保存。
 
-默认后端是 **SqliteSaver**：写入 ``data/memory/agent_memory.sqlite``，
+默认后端是 **SqliteSaver**：写入 ``data/memory/checkpoints.sqlite``，
 进程重启后同一 thread_id 的对话仍在（跨进程存活）。
 
 thread_id 必须来自请求身份，不能每次会话随机 uuid —— 否则重启就"失忆"。
@@ -11,7 +11,8 @@ thread_id 必须来自请求身份，不能每次会话随机 uuid —— 否则
 
 环境变量：
     AGENT_MEMORY_BACKEND=memory   → 退回 InMemorySaver（测试 / CI）
-    AGENT_MEMORY_DB=<path>        → 自定义 sqlite 文件
+    AGENT_MEMORY_DB=<path>        → 自定义 checkpointer 的 sqlite 文件
+                                    （与 store 的 AGENT_MEMORY_STORE_DB 分开，避锁争用）
 
 生产多实例：换 ``langgraph.checkpoint.postgres.PostgresSaver``（见 README「生产化」）。
 """

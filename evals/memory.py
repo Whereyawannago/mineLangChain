@@ -26,6 +26,7 @@ if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
 from evals.lib import (  # noqa: E402
+    bootstrap_runtime,
     collect_tool_calls,
     count_message_tokens,
     enable_tracing_if_configured,
@@ -37,6 +38,7 @@ from evals.lib import (  # noqa: E402
     stamp,
     write_jsonl,
 )
+from agent.context import set_current_context, reset_current_context  # noqa: E402
 
 # 剧本：save 在一个 thread，后续每个相近问题都在全新 thread（短期记忆清空）
 SAVE_TURN = "请记住：我叫小明，而且回答尽量控制在 20 字以内。"
@@ -104,9 +106,17 @@ def _run_protocol(with_memory: bool, run_id: str) -> dict:
         nonlocal in_tok, out_tok
         thread_id = f"{user}-{thread}"
         config = {"configurable": {"thread_id": thread_id}}
-        context = identity_context(run_id, user, thread_id)
-        result = agent.invoke({"messages": [{"role": "user", "content": text}]},
-                              config=config, context=context)
+        # 给 RAG ACL 提供 role：带记忆的变体走 admin（看全库），基线走 user（只看白名单）——
+        # 两边故意不同，这样才能观察到 ACL 对回答的影响；role 在 identity_context 里一次给全。
+        ctx = identity_context(
+            run_id, user, thread_id, role=("admin" if with_memory else "user")
+        )
+        token = set_current_context(ctx)
+        try:
+            result = agent.invoke({"messages": [{"role": "user", "content": text}]},
+                                  config=config, context=ctx)
+        finally:
+            reset_current_context(token)
         msgs = result.get("messages", [])
         t = count_message_tokens(msgs)
         in_tok += t["input_approx"]
@@ -145,6 +155,8 @@ def _run_protocol(with_memory: bool, run_id: str) -> dict:
 
 def main() -> None:
     ensure_utf8()
+    # 必须在检查 API key 之前引导（agent 包 import 时已不再 load_dotenv）
+    bootstrap_runtime()
     tracing = enable_tracing_if_configured()
     print("LangSmith tracing: " + ("ON" if tracing else "off（设 LANGSMITH_API_KEY 可开）"))
 
@@ -164,7 +176,11 @@ def main() -> None:
         print("\n缺少 ANTHROPIC_API_KEY：请在项目根 .env 里配置后再跑（会消耗真实 token）。")
         return
 
-    recs = [_run_protocol(True), _run_protocol(False)]
+    # run_id 一次生成、两个变体共用 —— 保证同一 run 内可对比，不同 run 之间记忆不串味。
+    # （旧代码这里漏传了 run_id，_run_protocol 一调就 TypeError，脚本根本跑不起来。）
+    run_id = stamp()
+    print(f"\nrun_id={run_id}")
+    recs = [_run_protocol(True, run_id), _run_protocol(False, run_id)]
     rows = [[
         r["variant"],
         "是" if r["save_user_preference"] else "否",

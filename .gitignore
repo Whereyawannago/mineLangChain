@@ -49,3 +49,6 @@ data/
 
 # Eval 运行产物（golden 标签保留，跑出来的结果不提交）
 evals/results/
+
+# 本地临时标记
+.prod

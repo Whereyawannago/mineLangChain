@@ -30,9 +30,17 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 from langchain.agents import create_agent  # noqa: E402
 
-from agent import MAX_CONTEXT_TOKENS  # noqa: E402
+from agent import MAX_CONTEXT_TOKENS, bootstrap  # noqa: E402
 from agent.builder import build_llm, build_structured_agent  # noqa: E402
-from agent.context import create_checkpointer, create_store, preference_tools  # noqa: E402
+from agent.context import (  # noqa: E402
+    ROLE_ADMIN,
+    UserContext,
+    create_checkpointer,
+    create_store,
+    preference_tools,
+    reset_current_context,
+    set_current_context,
+)
 from agent.middleware import (  # noqa: E402
     make_model_call_limit_middleware,
     make_summarization_middleware,
@@ -44,21 +52,13 @@ from agent.structured import (  # noqa: E402
     verify_rag_sources,
 )
 
+# demo 统一用一个身份。role=admin 是必需的：ACL 现在是 fail-closed，
+# 不设请求上下文的话 search_docs 会直接返回空集，Demo 3 就变成"知识库没东西"的假象。
+_DEMO_USER = "demo-structured"
 
-SYSTEM_PROMPT = """\
-# 角色
-你是一个友好、简洁的中文助手。
 
-# 回答风格
-- 先给一句话结论，再用要点展开。
-- 避免冗长；不要重复用户已经说过的话。
-
-# 兜底流程（重要）
-- 必须按你被指定的结构化 schema 输出，不要输出 schema 之外的字段。
-- 如果你不确定或问题超出你的内置知识，直接在 confidence 字段降低分数（如 0.3），
-  并在 content / answer 字段如实说明。
-- 不要凭空编造 API、配置项、代码细节。
-"""
+def _demo_context(thread_id: str) -> UserContext:
+    return UserContext(user_id=_DEMO_USER, thread_id=thread_id, role=ROLE_ADMIN)
 
 
 def _bar(title: str) -> None:
@@ -74,7 +74,8 @@ def _demo_chat_reply() -> None:
 
     agent = build_structured_agent(ChatReply, include_rag=False)
 
-    config = {"configurable": {"thread_id": "demo-structured-chatreply"}}
+    thread_id = "demo-structured-chatreply"
+    config = {"configurable": {"thread_id": thread_id}}
 
     user_msg = "你好，请用一句话介绍 LangChain。"
     print(f"  用户：{user_msg}")
@@ -82,6 +83,7 @@ def _demo_chat_reply() -> None:
     result = agent.invoke(
         {"messages": [{"role": "user", "content": user_msg}]},
         config=config,
+        context=_demo_context(thread_id),
     )
 
     reply = result["structured_response"]
@@ -96,7 +98,8 @@ def _demo_weather_report() -> None:
 
     agent = build_structured_agent(WeatherReport, include_rag=False)
 
-    config = {"configurable": {"thread_id": "demo-structured-weather"}}
+    thread_id = "demo-structured-weather"
+    config = {"configurable": {"thread_id": thread_id}}
 
     user_msg = "上海今天天气怎么样？给我结构化结果。"
     print(f"  用户：{user_msg}")
@@ -104,6 +107,7 @@ def _demo_weather_report() -> None:
     result = agent.invoke(
         {"messages": [{"role": "user", "content": user_msg}]},
         config=config,
+        context=_demo_context(thread_id),
     )
 
     report = result["structured_response"]
@@ -137,6 +141,7 @@ def _demo_rag_answer() -> None:
     result = agent.invoke(
         {"messages": [{"role": "user", "content": user_msg}]},
         config=config,
+        context=_demo_context("demo-structured-rag"),
     )
 
     # 后校验：剔除模型编造、不在本次检索结果里的引用来源
@@ -175,6 +180,7 @@ def _demo_compare_to_free_text() -> None:
     free_result = free_agent.invoke(
         {"messages": [{"role": "user", "content": user_msg}]},
         config=config,
+        context=_demo_context("demo-compare"),
     )
     free_text = free_result["messages"][-1].content
     print(f"  自由文本 agent：")
@@ -186,6 +192,7 @@ def _demo_compare_to_free_text() -> None:
     struct_result = struct_agent.invoke(
         {"messages": [{"role": "user", "content": user_msg}]},
         config=config,
+        context=_demo_context("demo-compare"),
     )
     struct_obj = struct_result["structured_response"]
     print(f"  结构化 agent：")
@@ -196,16 +203,25 @@ def _demo_compare_to_free_text() -> None:
 
 
 def main() -> None:
+    # 入口引导：.env → HF 缓存 → 日志（build_llm 要读 ANTHROPIC_API_KEY）
+    bootstrap()
+
     print("=" * 70)
     print(" 结构化输出 demo —— ToolStrategy + Pydantic schema")
     print("=" * 70)
     print(f"  摘要触发阈值：{MAX_CONTEXT_TOKENS} tokens")
+    print(f"  demo 身份：user_id={_DEMO_USER} role={ROLE_ADMIN}（ACL fail-closed，不给角色就看不到 RAG）")
     print()
 
-    _demo_chat_reply()
-    _demo_weather_report()
-    _demo_rag_answer()
-    _demo_compare_to_free_text()
+    # 整个 demo 共享一个请求上下文；退出时必须 reset，不要把身份泄给后续代码
+    ctx_token = set_current_context(_demo_context("demo-structured"))
+    try:
+        _demo_chat_reply()
+        _demo_weather_report()
+        _demo_rag_answer()
+        _demo_compare_to_free_text()
+    finally:
+        reset_current_context(ctx_token)
 
     print()
     print("=" * 70)

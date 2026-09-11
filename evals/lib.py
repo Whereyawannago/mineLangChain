@@ -39,6 +39,18 @@ def stamp() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
+def bootstrap_runtime(*, log_level: str | int | None = None) -> None:
+    """入口引导：加载 .env / 配 HF 缓存 / 配日志。
+
+    **必须在检查 ANTHROPIC_API_KEY 之前调**。早先 evals 是靠 ``import agent`` 的模块级
+    ``load_dotenv()`` 副作用把 key 带进环境的；那个副作用已经移除（见 agent/bootstrap.py），
+    改成入口显式调用 —— 否则 ``import`` 完成前看到的是空环境，会误报「缺少 API key」。
+    """
+    from agent.bootstrap import bootstrap  # noqa: PLC0415
+
+    bootstrap(log_level=log_level)
+
+
 def load_json(path: str | Path) -> list | dict:
     with Path(path).open(encoding="utf-8") as f:
         return json.load(f)
@@ -190,16 +202,27 @@ def relevant_hit_rank(pred_files: list[str], relevant: set[str]) -> int | None:
 
 # ────────────────────────────── LangSmith / tracing ──────────────────────────────
 
-def identity_context(run_id: str, user: str, thread: str):
+def identity_context(run_id: str, user: str, thread: str, role: str = "user"):
     """构造一次 eval 的 UserContext。
 
     贯穿整个 run 的 user/thread 用同一个 run_id 前缀 —— 这样：
       - 一次 run 内部可以用不同 thread 测「跨会话」，但长期记忆同属一个用户；
       - 不同 run 之间天然隔离，不会读到上一次 run 留下的偏好。
+
+    ``role`` 在这里一次给全：早先的写法是本函数造一个默认 role=user 的 ctx，
+    调用方再自己重建一个带 role 的 ctx —— 前一个对象纯属白造，而且两处默认值一旦
+    不一致就会出现「eval 看不到该看到的文档」这类难查问题（ACL 现在是 fail-closed，
+    拿不到上下文直接返回空集，更容易踩到）。
+
+    Args:
+        run_id: 本次 run 的唯一标识（一般用 ``stamp()``）。
+        user:   变体 / 场景名，用于在同一 run 内区隔不同对照组的长期记忆。
+        thread: thread_id（短期记忆隔离粒度）。
+        role:   ACL 角色，``"admin"`` 放行全集 / ``"user"`` 仅白名单目录。
     """
     from agent import UserContext  # noqa: PLC0415
 
-    return UserContext(user_id=f"eval-{user}-{run_id}", thread_id=thread)
+    return UserContext(user_id=f"eval-{user}-{run_id}", thread_id=thread, role=role)
 
 
 def enable_tracing_if_configured() -> bool:

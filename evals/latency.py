@@ -25,6 +25,7 @@ if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
 from evals.lib import (  # noqa: E402
+    bootstrap_runtime,
     collect_tool_calls,
     count_message_tokens,
     enable_tracing_if_configured,
@@ -35,6 +36,7 @@ from evals.lib import (  # noqa: E402
     stamp,
     write_jsonl,
 )
+from agent.context import set_current_context, reset_current_context  # noqa: E402
 
 # 覆盖三种典型负载：闲聊（不调工具）/ 算术（内置知识）/ RAG（会触发 search_docs）
 DEFAULT_QUERIES = [
@@ -46,6 +48,8 @@ DEFAULT_QUERIES = [
 
 def main() -> None:
     ensure_utf8()
+    # 必须在检查 API key 之前引导（agent 包 import 时已不再 load_dotenv）
+    bootstrap_runtime()
     tracing = enable_tracing_if_configured()
     print("LangSmith tracing: " + ("ON" if tracing else "off（设 LANGSMITH_API_KEY 可开）"))
 
@@ -96,10 +100,15 @@ def main() -> None:
         for it in range(args.iter):
             thread_id = f"lat-{run_id}-{qi}-{it}"
             config = {"configurable": {"thread_id": thread_id}}
-            context = identity_context(run_id, "latency", thread_id)
-            t0 = time.perf_counter()
-            result = agent.invoke({"messages": [{"role": "user", "content": q}]},
-                                  config=config, context=context)
+            # latency 单测默认用 admin（不挡 RAG 看全库）；要看 user 行为单跑 memory.py
+            ctx = identity_context(run_id, "latency", thread_id, role="admin")
+            token = set_current_context(ctx)
+            try:
+                t0 = time.perf_counter()
+                result = agent.invoke({"messages": [{"role": "user", "content": q}]},
+                                      config=config, context=ctx)
+            finally:
+                reset_current_context(token)
             lat.append(time.perf_counter() - t0)
 
             msgs = result.get("messages", [])

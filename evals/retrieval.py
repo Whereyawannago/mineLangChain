@@ -23,6 +23,7 @@ if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
 from evals.lib import (  # noqa: E402
+    bootstrap_runtime,
     dedup_files,
     ensure_results_dir,
     ensure_utf8,
@@ -38,6 +39,8 @@ from evals.lib import (  # noqa: E402
 
 def main() -> None:
     ensure_utf8()
+    # 本脚本不调模型，但仍需要 .env 里的 AGENT_VECTORSTORE_DIR / AGENT_LOG_LEVEL 等配置
+    bootstrap_runtime()
     ap = argparse.ArgumentParser(description="检索质量离线评测（HybridRetriever recall@k / MRR）")
     ap.add_argument("--golden", default=str(_PROJECT / "evals" / "golden_retrieval.json"),
                     help="golden 标签 JSON 路径")
@@ -52,7 +55,10 @@ def main() -> None:
         cases = cases[: args.limit]
     print(f"加载 {len(cases)} 条 golden 查询（top={args.top}）")
 
-    # 组装与 build_agent 相同的混合检索（只是把 top_k 调大以便算 recall 曲线）
+    # 组装与 build_agent 相同的混合检索（只是把 top_k 调大以便算 recall 曲线）。
+    # 注意：**故意不包 ACLRetriever** —— 本评测量的是「召回质量」，不是「权限过滤」；
+    # ACL 是 fail-closed 的，包上之后没有请求上下文会直接返回空集，recall 恒为 0。
+    # 要量“某个角色实际能召回多少”，请自行包 ACLRetriever 并在外面 set_current_context。
     from agent.rag import (  # noqa: PLC0415
         HybridRetriever,
         build_embeddings,
