@@ -15,7 +15,14 @@ minimax 的 ``/v1/embeddings``（协议不是 OpenAI 标准的 ``data[*].embeddi
    如果机器无法出网（DNS / 防火墙），请提前手动放模型到本地缓存目录。
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from agent.bootstrap import configure_hf_cache
+
+if TYPE_CHECKING:
+    from langchain_huggingface import HuggingFaceEmbeddings
 
 # HF 缓存重定向到项目内 .huggingface/（已在 .gitignore 里），不污染用户目录。
 #
@@ -25,8 +32,6 @@ from agent.bootstrap import configure_hf_cache
 # 目录下的东西直接 import），真正生效的是 agent 包 __init__ 里那一次。
 # configure_hf_cache() 会在发现「固化值与期望值不一致」时打 WARNING，便于定位。
 configure_hf_cache()
-
-from langchain_huggingface import HuggingFaceEmbeddings  # noqa: E402
 
 # bge-small-zh-v1.5：中文友好、dim 适中、模型体积小（~93MB）
 EMBED_MODEL_NAME = "BAAI/bge-small-zh-v1.5"
@@ -55,6 +60,11 @@ def build_embeddings(model_name: str = EMBED_MODEL_NAME) -> HuggingFaceEmbedding
         ``HuggingFaceEmbeddings``：可直接传给 ``Chroma.from_documents(...)``
         或 ``vectorstore.as_retriever()``。
     """
+    # 延迟 import：langchain_huggingface 会经 sentence-transformers 拖进 torch，这是
+    # `import agent` 变重（实测 ~35s）的最大来源。下沉到函数体，让 import agent 保持轻量；
+    # 调用点（build_agent / 灌库 / 评测）都发生在 HF_HOME 已配好之后，时序不受影响。
+    from langchain_huggingface import HuggingFaceEmbeddings  # noqa: PLC0415
+
     return HuggingFaceEmbeddings(
         model_name=model_name,
         model_kwargs=_DEFAULT_MODEL_KWARGS,
