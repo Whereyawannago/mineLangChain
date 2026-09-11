@@ -44,9 +44,12 @@ from .identity import (
 )
 from .long_term import (
     create_store,
+    delete_user_preference,
     get_user_preference,
+    list_user_preferences,
     pref_namespace,
     preference_tools,
+    purge_expired_preferences,
     save_user_preference,
 )
 from .short_term import create_checkpointer
@@ -80,6 +83,9 @@ __all__ = [
     "create_store",
     "get_user_preference",
     "save_user_preference",
+    "delete_user_preference",
+    "list_user_preferences",
+    "purge_expired_preferences",
     "preference_tools",
     "pref_namespace",
 ]

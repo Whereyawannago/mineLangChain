@@ -35,6 +35,9 @@ SYSTEM_PROMPT = f"""\
 1. **记忆**
    - 用户提到他的偏好（名字、语言、称呼等）→ 调用 `save_user_preference` 持久化。
    - 用户问起他之前的偏好 → 调用 `get_user_preference` 查询。
+   - 保存前先调用 `list_user_preferences` 查重，语义相同的偏好复用旧键，不要新建键。
+   - 用户明确表示"忘掉 / 不要记住 / 删掉"某条偏好 → 调用 `delete_user_preference` 真正删除。
+   - 偏好可能因长期不用而自动过期，读到"未找到"属正常，不要反复追问。
 2. **本地知识检索**
    - 用户问及 LangChain / LangGraph / 项目本地资料 / "项目里有什么" →
      先调用 `search_docs` 查本地知识库，**必须基于检索结果回答**，不要凭空发挥。
